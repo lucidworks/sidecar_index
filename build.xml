@@ -1,0 +1,265 @@
+<project xmlns:ivy="antlib:org.apache.ivy.ant" name="sidecar-index" default="resolve">
+  <property name="ivy.dir" location="ivy/"/>
+  <property name="ivy.dep.file" location="ivy.xml"/>
+  <property name="ivy.version" value="2.3.0-rc2"/>
+
+  <property name="build.dir" value="build"/>
+  <property name="lib.dir" value="lib"/>
+
+  <property name="src.dir" location="src/main/java"/>
+  <property name="test.src.dir" location="src/test/java"/>
+  <property name="resources.dir" value="src/main/resources"/>
+  <property name="test.resources.dir" value="src/test/resources"/>
+  <property name="classes.dir" value="${build.dir}/classes"/>
+  <property name="test.classes" value="${build.dir}/test-classes"/>
+  <property name="test.reports" value="${build.dir}/test-reports"/>
+  <property file="${user.home}/.ant/build.properties"/>
+  <property file="build.properties"/>
+
+  <!-- Ivy -->
+
+  <condition property="ivy.jar.exists">
+    <or>
+      <available file="${ivy.dir}/ivy-${ivy.version}.jar"/>
+      <isset property="offline"/>
+    </or>
+  </condition>
+
+  <target name="ivy-download" unless="ivy.jar.exists">
+    <mkdir dir="${ivy.dir}"/>
+    <get src="http://repo2.maven.org/maven2/org/apache/ivy/ivy/${ivy.version}/ivy-${ivy.version}.jar"
+         dest="${ivy.dir}/ivy-${ivy.version}.jar"
+         usetimestamp="true"/>
+  </target>
+
+  <target name="ivy-init" depends="ivy-download" unless="skip.ivy" description="initialize ivy">
+    <path id="ivy.lib.path">
+      <fileset dir="${ivy.dir}" includes="*.jar"/>
+    </path>
+    <taskdef resource="org/apache/ivy/ant/antlib.xml" uri="antlib:org.apache.ivy.ant" classpathref="ivy.lib.path"/>
+    <ivy:settings file="${ivy.dir}/ivysettings.xml"/>
+  </target>
+
+  <target name="ivy-clean-libs" depends="ivy-init" description="clean up ivy libs">
+    <delete includeemptydirs="true" quiet="true">
+      <fileset dir=".">
+        <include name="**/lib/ivy/**/*"/>
+      </fileset>
+    </delete>
+  </target>
+
+  <target name="ivy-clean" depends="ivy-init" description="clean ivy cache and libs">
+    <ivy:cleancache/>
+    <delete dir="${lib.dir}/ivy"/>
+  </target>
+
+  <target name="ivy-resolve" depends="ivy-init" description="fetch dependencies with ivy" unless="offline">
+    <ivy:resolve/>
+    <ivy:retrieve pattern="${lib.dir}/ivy/[conf]/[artifact]-[revision](-[classifier]).[ext]"/>
+    <ivy:report todir="${build.dir}/ivy-report"/>
+  </target>
+
+  <target name="ivy-resolve-test" depends="ivy-init" unless="ivy.skip">
+    <ivy-resolve-conf conf="test" lib.dir="${lib.dir}" report.dir="${build.dir}/ivy-report"/>
+  </target>
+
+  <target name="ivy-publish-local" depends="ivy-init, jar" description="publish artifacts locally">
+    <ivy:publish artifactspattern="${build.dir}/[artifact].[ext]"
+        resolver="local"
+        overwrite="true"
+        pubrevision="${version}"
+        status="integration"
+        conf="default"/>
+  </target>
+
+  <macrodef name="ivy-resolve-conf">
+    <attribute name="conf"/>
+    <attribute name="lib.dir"/>
+    <attribute name="report.dir"/>
+    <sequential>
+      <echo>Resolving ivy conf: @{conf} for lib.dir: @{lib.dir}</echo>
+      <ivy:resolve conf="@{conf}" refresh="${ivy.refresh}" log="download-only"/>
+      <ivy:report conf="@{conf}" todir="@{report.dir}"/>
+      <ivy:retrieve pattern="@{lib.dir}/ivy/[conf]/[artifact]-[revision](-[classifier]).[ext]" conf="@{conf}"/>
+    </sequential>
+  </macrodef>
+
+  <!-- Simple junit wrapper that generates Emma reports if enabled -->
+  <macrodef name="junitwrapper">
+    <attribute name="src.refid"/>
+    <element name="junit" implicit="true"/>
+    <sequential>
+      <echo message="in junitwrapper" level="debug"/>
+      <junit/>
+      <fail if="junit.failed"/>
+    </sequential>
+  </macrodef>
+
+  <macrodef name="javacwrapper">
+    <attribute name="srcdir"/>
+    <attribute name="destdir"/>
+    <attribute name="debug" default="false"/>
+    <element name="classpath"/>
+    <sequential>
+      <echo message="javacwrapper: Compiling @{srcdir} to @{destdir} with debug=@{debug}" level="debug"/>
+      <path id="cp">
+        <classpath/>
+      </path>
+      <mkdir dir="@{destdir}"/>
+      <copy todir="@{destdir}">
+        <fileset dir="@{srcdir}">
+          <include name="${compile.to.include}"/>
+          <include name="**/*.csv"/>
+          <include name="**/*.txt"/>
+        </fileset>
+      </copy>
+      <javac srcdir="@{srcdir}" destdir="@{destdir}" debug="@{debug}" encoding="UTF-8" classpathref="cp"/>
+    </sequential>
+  </macrodef>
+
+  <target name="jar" depends="compile" description="bundle up the jars">
+    <mkdir dir="${build.dir}"/>
+    <jar jarfile="${build.dir}/${ant.project.name}.jar" basedir="${classes.dir}"/>
+  </target>
+
+  <!-- Eclipse -->
+
+  <target name="eclipse" depends="ant-eclipse-init,ivy-resolve" description="Create eclipse project files">
+    <path id="eclipse-libs">
+      <fileset dir="${lib.dir}">
+        <include name="ivy/compile/*.jar"/>
+      </fileset>
+    </path>
+    <eclipse updatealways="true">
+      <project name="${ant.project.name}"/>
+      <classpath>
+        <source path="${src.dir}" output="${classes.dir}"/>
+        <source path="${build.dir}/avro-sources" output="${classes.dir}"/>
+        <library pathref="eclipse-libs"/>
+        <output path="${build.dir}/eclipse"/>
+      </classpath>
+    </eclipse>
+  </target>
+
+  <condition property="ant-eclipse.jar.exists">
+    <or>
+      <available file="${build.dir}/lib/ant-eclipse-1.0-jvm1.2.jar"/>
+      <isset property="offline"/>
+    </or>
+  </condition>
+
+  <target name="ant-eclipse-download" unless="ant-eclipse.jar.exists">
+    <mkdir dir="${build.dir}"/>
+    <get src="http://downloads.sourceforge.net/project/ant-eclipse/ant-eclipse/1.0/ant-eclipse-1.0.bin.tar.bz2"
+         dest="${build.dir}/ant-eclipse-1.0.bin.tar.bz2"
+         usetimestamp="false"/>
+    <untar src="${build.dir}/ant-eclipse-1.0.bin.tar.bz2"
+           dest="${build.dir}"
+           compression="bzip2">
+      <patternset>
+        <include name="lib/ant-eclipse-1.0-jvm1.2.jar"/>
+      </patternset>
+    </untar>
+    <delete file="${build.dir}/java/ant-eclipse-1.0.bin.tar.bz2"/>
+  </target>
+
+  <target name="ant-eclipse-init" depends="ant-eclipse-download">
+    <taskdef name="eclipse"
+             classname="prantl.ant.eclipse.EclipseTask"
+             classpath="${build.dir}/lib/ant-eclipse-1.0-jvm1.2.jar"/>
+  </target>
+
+  <!-- Build targets -->
+  <target name="compile" depends="ivy-resolve" description="compile">
+    <javacwrapper srcdir="${src.dir}" destdir="${classes.dir}" debug="true">
+                        <classpath>
+                                <fileset dir="${lib.dir}">
+                                        <include name="ivy/default/*.jar"/>
+          <include name="ivy/lucid/*.jar"/>
+          <include name="ivy/solr/*.jar"/>
+                                </fileset>
+                        </classpath>
+                </javacwrapper>
+  </target>
+
+  <target name="compile-test" depends="ivy-resolve-test,compile">
+    <mkdir dir="${test.classes}"/>
+                <mkdir dir="${test.reports}"/>
+                <javac srcdir="${test.src.dir}" destdir="${test.classes}" debug="true" encoding="UTF-8">
+                        <classpath>
+                                <fileset dir="${lib.dir}">
+                                        <include name="ivy/test/*.jar"/>
+          <include name="ivy/test/*.jar"/>
+                                </fileset>
+                                <dirset dir="${classes.dir}"/>
+                        </classpath>
+                </javac>
+                <copy todir="${test.classes}">
+                        <fileset dir="${test.resources.dir}" includes="*"/>
+                </copy>
+  </target>
+
+  <target name="test" depends="compile-test">
+    <path id="emma.src">
+                        <fileset dir="${src.dir}" includes="**/*.java"/>
+                </path>
+    <condition property="runall">
+        <not>
+          <or>
+            <isset property="testcase" />
+          </or>
+        </not>
+      </condition>
+                <junitwrapper src.refid="emma.src">
+                        <mkdir dir="${test.reports}"/>
+                        <junit printsummary="true" showoutput="false" logfailedtests="true"
+             errorproperty="junit.failed" failureproperty="junit.failed"
+             fork="true" forkMode="perTest">
+                                <!-- TODO set timeout here -->
+        <jvmarg line="-ea -Dsolr.solr.home=${basedir}/src/test/resources/solr"/>
+                                <formatter type="xml"/>
+                                <formatter type="brief"/>
+                                <classpath>
+          <pathelement path="src/test/resources" />
+          <fileset dir="${lib.dir}">
+            <include name="ivy/test/*test-framework*.jar"/>
+                                        </fileset>
+                                        <fileset dir="${lib.dir}">
+            <include name="ivy/test/*.jar"/>
+                                        </fileset>
+                                        <fileset dir="${lib.dir}">
+                                                <include name="*.jar"/>
+                                        </fileset>
+                                        <dirset dir="${classes.dir}"/>
+                                        <dirset dir="${test.classes}"/>
+
+                                </classpath>
+                <syspropertyset>
+                  <propertyref builtin="commandline"/>
+                </syspropertyset>
+                <sysproperty key="emma.rt.control" value="false"/>
+                                <!--<jvmarg line="-Demma.coverage.out.file=${coverage.dir}/coverage.emma -Demma.coverage.out.merge=true"/>-->
+        <batchtest fork="yes" todir="${build.dir}/test-reports" if="testcase">
+          <fileset dir="${test.src.dir}">
+            <include name="**/*${testcase}*" />
+          </fileset>
+        </batchtest>
+                                <batchtest todir="${build.dir}/test-reports" if="runall">
+                                        <fileset dir="${test.src.dir}">
+                                                <include name="**/Test*.java"/>
+                                                <include name="**/*Test.java"/>
+                                        </fileset>
+                                </batchtest>
+                        </junit>
+                        <!--<antcall target="test-summary"/>-->
+                </junitwrapper>
+  </target>
+
+  <target name="clean">
+    <delete includeemptydirs="true" quiet="true">
+      <fileset dir="${build.dir}" />
+    </delete>
+  </target>
+
+
+</project>
